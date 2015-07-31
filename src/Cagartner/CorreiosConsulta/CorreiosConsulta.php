@@ -116,11 +116,22 @@ class CorreiosConsulta
             if(phpQuery::pq($pq_div)->is('.caixacampobranco') || phpQuery::pq($pq_div)->is('.caixacampoazul')){
                 $dados = array();
                 $dados['cliente'] = trim(phpQuery::pq('.resposta:contains("Cliente: ") + .respostadestaque:eq(0)',$pq_div)->text());
+                
+                if(count(phpQuery::pq('.resposta:contains("Endereço: ") + .respostadestaque:eq(0)',$pq_div))) {
+                    $dados['logradouro/de'] = explode(' - de ', trim(phpQuery::pq('.resposta:contains("Endereço: ") + .respostadestaque:eq(0)',$pq_div)->text()));
+                    $dados['logradouro'] = $dados['logradouro/de'][0];
+                } else {
+                    $dados['logradouro/de'] = explode(' - de ', trim(phpQuery::pq('.resposta:contains("Logradouro: ") + .respostadestaque:eq(0)',$pq_div)->text()));
+                    $dados['logradouro'] = $dados['logradouro/de'][0];
+                }
 
-                if(count(phpQuery::pq('.resposta:contains("Endereço: ") + .respostadestaque:eq(0)',$pq_div)))
-                    $dados['logradouro'] = trim(phpQuery::pq('.resposta:contains("Endereço: ") + .respostadestaque:eq(0)',$pq_div)->text());
-                else
-                    $dados['logradouro'] = trim(phpQuery::pq('.resposta:contains("Logradouro: ") + .respostadestaque:eq(0)',$pq_div)->text());
+                if(count($dados['logradouro/de']) > 1) {
+                    $dados['de/ate'] = $dados['logradouro/de'][1];
+                }
+                else {
+                    $dados['de/ate'] = '';
+                }
+
                 $dados['bairro']    = trim(phpQuery::pq('.resposta:contains("Bairro: ") + .respostadestaque:eq(0)',$pq_div)->text());
 
                 $dados['cidade/uf'] = trim(phpQuery::pq('.resposta:contains("Localidade") + .respostadestaque:eq(0)',$pq_div)->text());
@@ -133,6 +144,7 @@ class CorreiosConsulta
                 $dados['uf']        = trim($dados['cidade/uf'][1]);
 
                 unset($dados['cidade/uf']);
+                unset($dados['logradouro/de']);
 
                 $pesquisa = $dados;
             }
