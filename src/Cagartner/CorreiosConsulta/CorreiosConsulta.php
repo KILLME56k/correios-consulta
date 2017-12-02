@@ -1,4 +1,6 @@
-<?php namespace Cagartner\CorreiosConsulta;
+<?php
+
+namespace Cagartner\CorreiosConsulta;
 
 use Cagartner\CorreiosConsulta\Curl;
 use PhpQuery\PhpQuery as phpQuery;
@@ -6,17 +8,70 @@ use PhpQuery\PhpQuery as phpQuery;
 class CorreiosConsulta
 {
 
-    public function frete($dados)
-    {
-        $endpoint = 'http://ws.correios.com.br/calculador/CalcPrecoPrazo.asmx?WSDL';
+    const FRETE_URL    = 'http://ws.correios.com.br/calculador/CalcPrecoPrazo.asmx?WSDL';
+    const CEP_URL      = 'http://www.buscacep.correios.com.br/sistemas/buscacep/resultadoBuscaCepEndereco.cfm';
+    const RASTREIO_URL = 'http://www2.correios.com.br/sistemas/rastreamento/resultado_semcontent.cfm';
 
-        $tipos = array(
-            'sedex'          => '40010',
-            'sedex_a_cobrar' => '40045',
-            'sedex_10'       => '40215',
-            'sedex_hoje'     => '40290',
-            'pac'            => '41106'
-        );
+    private static $tipos = array(
+        'sedex'          => '04014',
+        'sedex_a_cobrar' => '40045',
+        'sedex_10'       => '40215',
+        'sedex_hoje'     => '40290',
+        'pac'            => '04510',
+        'pac_contrato'   => '04669',
+        'sedex_contrato' => '04162',
+        'esedex'         => '81019',
+    );
+
+    public static function getTipos()
+    {
+        return self::$tipos;
+    }
+
+    /**
+     * Verifica se e uma solicitacao de varios $tipos
+     *
+     * @param $valor string
+     * @return boolean
+     */
+    public static function getTipoIsArray($valor)
+    {
+        return count(explode(",", $valor)) > 1 ?: false;
+    }
+
+    /**
+     * @param $valor string
+     * @return string
+     */
+    public static function getTipoIndex($valor)
+    {
+        return array_search($valor, self::getTipos());
+    }
+
+    /**
+     * Retorna todos os codigos em uma linha
+     *
+     * @param $valor string
+     * @return string
+     */
+    public static function getTipoInline($valor)
+    {
+        $explode = explode(",", $valor);
+        $tipos   = array();
+
+        foreach ($explode as $value)
+        {
+            $tipos[] = self::$tipos[$value];
+        }
+
+        return implode(",", $tipos);
+    }
+
+    public function frete($dados, $options = array())
+    {
+        $endpoint = self::FRETE_URL;
+
+        $tipos = self::getTipoInline($dados['tipo']);
 
         $formatos = array(
             'caixa'    => 1,
@@ -24,30 +79,32 @@ class CorreiosConsulta
             'envelope' => 3,
         );
 
-        $dados['tipo']    = $tipos[$dados['tipo']];
+        $dados['tipo']    = $tipos;
         $dados['formato'] = $formatos[$dados['formato']];
         /* dados[tipo]
-        40010 SEDEX Varejo
-        40045 SEDEX a Cobrar Varejo
-        40215 SEDEX 10 Varejo
-        40290 SEDEX Hoje Varejo
-        41106 PAC Varejo
-        */
+          04014 SEDEX Varejo
+          40045 SEDEX a Cobrar Varejo
+          40215 SEDEX 10 Varejo
+          40290 SEDEX Hoje Varejo
+          04510 PAC Varejo
+         */
 
         /*
-        1 – Formato caixa/pacote
-        2 – Formato rolo/prisma
-        3 - Envelope
-        */
+          1 eh Formato caixa/pacote
+          2 eh Formato rolo/prisma
+          3 - Envelope
+         */
         $dados['cep_destino'] = preg_replace("/[^0-9]/", '', $dados['cep_destino']);
         $dados['cep_origem']  = preg_replace("/[^0-9]/", '', $dados['cep_origem']);
 
-        $soap = new \SoapClient($endpoint, array(
+        $options = array_merge(array(
             'trace'              => true,
             'exceptions'         => true,
             'compression'        => SOAP_COMPRESSION_ACCEPT | SOAP_COMPRESSION_GZIP,
             'connection_timeout' => 1000
-        ));
+        ), $options);
+
+        $soap = new \SoapClient($endpoint, $options);
 
         $params = array(
             'nCdEmpresa'          => (isset($dados['empresa']) ? $dados['empresa'] : ''),
@@ -66,29 +123,35 @@ class CorreiosConsulta
             'sCdAvisoRecebimento' => (isset($dados['aviso_recebimento']) && $dados['aviso_recebimento'] ? 'S' : 'N'),
             'sDtCalculo'          => date('d/m/Y'),
         );
-        //die(print_r($params,true));
+
         $CalcPrecoPrazoData = $soap->CalcPrecoPrazoData($params);
         $resultado          = $CalcPrecoPrazoData->CalcPrecoPrazoDataResult->Servicos->cServico;
 
-        if(!is_array($resultado))
+        if (!is_array($resultado))
             $resultado = array($resultado);
 
         $dados = array();
 
-        foreach($resultado as $consulta){
+        foreach ($resultado as $consulta)
+        {
             $consulta = (array) $consulta;
 
-            $dados = array(
+            $dados[] = array(
                 'codigo'             => $consulta['Codigo'],
-                'valor'              => (float) str_replace(',','.',$consulta['Valor']),
-                'prazo'              => (int) str_replace(',','.',$consulta['PrazoEntrega']),
-                'mao_propria'        => (float) str_replace(',','.',$consulta['ValorMaoPropria']),
-                'aviso_recebimento'  => (float) str_replace(',','.',$consulta['ValorAvisoRecebimento']),
-                'valor_declarado'    => (float) str_replace(',','.',$consulta['ValorValorDeclarado']),
+                'valor'              => (float) str_replace(',', '.', $consulta['Valor']),
+                'prazo'              => (int) str_replace(',', '.', $consulta['PrazoEntrega']),
+                'mao_propria'        => (float) str_replace(',', '.', $consulta['ValorMaoPropria']),
+                'aviso_recebimento'  => (float) str_replace(',', '.', $consulta['ValorAvisoRecebimento']),
+                'valor_declarado'    => (float) str_replace(',', '.', $consulta['ValorValorDeclarado']),
                 'entrega_domiciliar' => ($consulta['EntregaDomiciliar'] === 'S' ? true : false),
                 'entrega_sabado'     => ($consulta['EntregaSabado'] === 'S' ? true : false),
-                'erro'               =>  array('codigo'=> (real)$consulta['Erro'],'mensagem'=>$consulta['MsgErro']),
+                'erro'               => array('codigo' => (real) $consulta['Erro'], 'mensagem' => $consulta['MsgErro']),
             );
+        }
+
+        if (self::getTipoIsArray($tipos) === false)
+        {
+            return isset($dados[0]) ? $dados[0] : [];
         }
 
         return $dados;
@@ -97,81 +160,90 @@ class CorreiosConsulta
     public function cep($cep)
     {
         $data = array(
-            'cepEntrada' => $cep,
-            'tipoCep'    =>'',
-            'cepTemp'    =>'',
-            'metodo'     =>'buscarCep',
+            'relaxation' => $cep,
+            'tipoCEP'    => 'ALL',
+            'semelhante'    => 'N',
         );
 
         $curl = new Curl;
 
-        $html = $curl->simple('http://m.correios.com.br/movel/buscaCepConfirma.do', $data);
+        $html = $curl->simple(self::CEP_URL, $data);
 
-        phpQuery::newDocumentHTML($html, $charset = 'utf-8');
+        phpQuery::newDocumentHTML($html, $charset = 'ISO-8859-1');
 
-        $pq_form = phpQuery::pq('');
+        $pq_form  = phpQuery::pq('');
         //$pq_form = phpQuery::pq('.divopcoes,.botoes',$pq_form)->remove();
         $pesquisa = array();
-        foreach(phpQuery::pq('#frmCep > div') as $pq_div){
-            if(phpQuery::pq($pq_div)->is('.caixacampobranco') || phpQuery::pq($pq_div)->is('.caixacampoazul')){
-                $dados = array();
-                $dados['cliente'] = trim(phpQuery::pq('.resposta:contains("Cliente: ") + .respostadestaque:eq(0)',$pq_div)->text());
-                
-                if(count(phpQuery::pq('.resposta:contains("Endereço: ") + .respostadestaque:eq(0)',$pq_div))) {
-                    $dados['logradouro/de'] = explode(' - de ', trim(phpQuery::pq('.resposta:contains("Endereço: ") + .respostadestaque:eq(0)',$pq_div)->text()));
-                    $dados['logradouro'] = $dados['logradouro/de'][0];
-                } else {
-                    $dados['logradouro/de'] = explode(' - de ', trim(phpQuery::pq('.resposta:contains("Logradouro: ") + .respostadestaque:eq(0)',$pq_div)->text()));
-                    $dados['logradouro'] = $dados['logradouro/de'][0];
+        if(phpQuery::pq('.tmptabela')){
+            $linha = 0;
+            foreach (phpQuery::pq('.tmptabela tr') as $pq_div)
+            {
+                if($linha){
+                    $itens = array();
+                    foreach (phpQuery::pq('td', $pq_div) as $pq_td){
+                        $children = $pq_td->childNodes;
+                        $innerHTML = '';
+                        foreach ($children as $child) {
+                            $innerHTML .= $child->ownerDocument->saveXML( $child );
+                        }
+                        $texto = preg_replace("/&#?[a-z0-9]+;/i","",$innerHTML);
+                        $itens[] = trim( $texto );
+                    }
+                    $dados = array();
+                    $dados['logradouro'] = trim($itens[0]);
+                    $dados['bairro'] = trim($itens[1]);
+                    $dados['cidade/uf'] = trim($itens[2]);
+                    $dados['cep'] = trim($itens[3]);
+
+                    $dados['cidade/uf'] = explode('/', $dados['cidade/uf']);
+
+                    $dados['cidade'] = trim($dados['cidade/uf'][0]);
+
+                    $dados['uf'] = trim($dados['cidade/uf'][1]);
+
+                    unset($dados['cidade/uf']);
+
+                    $pesquisa = $dados;
                 }
 
-                if(count($dados['logradouro/de']) > 1) {
-                    $dados['de/ate'] = $dados['logradouro/de'][1];
-                }
-                else {
-                    $dados['de/ate'] = '';
-                }
-
-                $dados['bairro']    = trim(phpQuery::pq('.resposta:contains("Bairro: ") + .respostadestaque:eq(0)',$pq_div)->text());
-
-                $dados['cidade/uf'] = trim(phpQuery::pq('.resposta:contains("Localidade") + .respostadestaque:eq(0)',$pq_div)->text());
-                $dados['cep']       = trim(phpQuery::pq('.resposta:contains("CEP: ") + .respostadestaque:eq(0)',$pq_div)->text());
-
-                $dados['cidade/uf'] = explode('/',$dados['cidade/uf']);
-
-                $dados['cidade']    = trim($dados['cidade/uf'][0]);
-
-                $dados['uf']        = trim($dados['cidade/uf'][1]);
-
-                unset($dados['cidade/uf']);
-                unset($dados['logradouro/de']);
-
-                $pesquisa = $dados;
+                $linha++;
             }
         }
         return $pesquisa;
     }
 
+
     public function rastrear($codigo)
     {
         $curl = new Curl;
 
-        $html = $curl->simple('http://websro.correios.com.br/sro_bin/txect01$.QueryList?P_LINGUA=001&P_TIPO=001&P_COD_UNI='.$codigo);
+        $html = $curl->simple(self::RASTREIO_URL, array(
+            "Objetos" => $codigo
+        ));
 
         phpQuery::newDocumentHTML($html, $charset = 'utf-8');
 
         $rastreamento = array();
-        $c = 0;
+        $c            = 0;
 
-        foreach(phpQuery::pq('tr') as $tr){$c++;
-            if(count(phpQuery::pq($tr)->find('td')) == 3 && $c > 1)
-                $rastreamento[] = array('data'=>phpQuery::pq($tr)->find('td:eq(0)')->text(),'local'=>phpQuery::pq($tr)->find('td:eq(1)')->text(),'status'=>phpQuery::pq($tr)->find('td:eq(2)')->text());
+        foreach (phpQuery::pq('tr') as $tr)
+        {
+            $c++;
+            if (count(phpQuery::pq($tr)->find('td')) == 2)
+            {
+                list($data, $hora, $local) = explode("<br>", phpQuery::pq($tr)->find('td:eq(0)')->html());
+                list($status, $encaminhado) = explode("<br>", phpQuery::pq($tr)->find('td:eq(1)')->html());
 
-            if(count(phpQuery::pq($tr)->find('td')) == 1 && $c > 1)
-                $rastreamento[count($rastreamento)-1]['encaminhado'] = phpQuery::pq($tr)->find('td:eq(0)')->text();
+                $rastreamento[] = array('data' => trim($data) . " " . trim($hora), 'local' => trim($local), 'status' => trim(strip_tags($status)));
+
+                if (trim($encaminhado))
+                {
+                    $rastreamento[count($rastreamento) - 1]['encaminhado'] = trim($encaminhado);
+                }
+            }
         }
 
-        if(!count($rastreamento))
+        if (!count($rastreamento))
             return false;
 
         return $rastreamento;
